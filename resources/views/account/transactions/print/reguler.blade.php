@@ -272,6 +272,11 @@
             </div>
 
             <div class="info-group">
+               <span class="info-label">Office Name</span>
+               <span class="info-value">{{ $transaction->customer->office_name }}</span>
+            </div>
+
+            <div class="info-group">
                <span class="info-label">Phone</span>
                <span class="info-value">{{ $transaction->customer->phone }}</span>
             </div>

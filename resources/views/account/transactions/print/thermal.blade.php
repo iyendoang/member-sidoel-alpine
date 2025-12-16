@@ -124,6 +124,10 @@
          <td class="text-right">{{ $transaction->customer->name }}</td>
       </tr>
       <tr>
+         <td>Office Name</td>
+         <td class="text-right">{{ $transaction->customer->office_name }}</td>
+      </tr>
+      <tr>
          <td>Phone</td>
          <td class="text-right">{{ $transaction->customer->phone }}</td>
       </tr>

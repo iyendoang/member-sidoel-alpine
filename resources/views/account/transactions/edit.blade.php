@@ -21,16 +21,53 @@
 
                <!-- Customer and Date Information -->
                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div>
+                  <div class="relative" @click.outside="showCustomerDropdown = false">
                      <label class="block font-medium mb-1">Customer</label>
-                     <select class="w-full border border-gray-200 rounded-xl px-3 py-2" x-model="customer_id" required>
-                        <option value="">~ Select Customer ~</option>
-                        @foreach ($customers as $customer)
-                           <option value="{{ $customer->id }}" {{ $transaction->customer_id == $customer->id ? 'selected' : '' }}>
-                              {{ $customer->name  . ' (' . $customer->office_name.')'}}
-                           </option>
-                        @endforeach
-                     </select>
+
+                     <div class="relative">
+                        <input
+                                type="text"
+                                class="w-full border border-gray-200 rounded-xl px-3 py-2 pr-10 focus:outline-none focus:ring-1 focus:ring-primary"
+                                placeholder="Search or select customer..."
+                                x-model="customerSearch"
+                                @focus="showCustomerDropdown = true"
+                                @input="filterCustomers()"
+                        />
+
+                        <div class="absolute inset-y-0 right-0 flex items-center pr-3 cursor-pointer">
+                           <template x-if="customer_id">
+                              <button type="button" @click="clearCustomer()" class="text-gray-400 hover:text-red-500">
+                                 ✕
+                              </button>
+                           </template>
+                           <template x-if="!customer_id">
+                              <span class="text-gray-400" @click="showCustomerDropdown = !showCustomerDropdown">▼</span>
+                           </template>
+                        </div>
+                     </div>
+
+                     <div
+                             x-show="showCustomerDropdown"
+                             x-transition.opacity
+                             class="absolute z-10 w-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg max-h-60 overflow-y-auto"
+                             style="display: none;"
+                     >
+                        <template x-for="cust in filteredCustomerList" :key="cust.id">
+                           <div
+                                   @click="selectCustomer(cust)"
+                                   class="px-4 py-2 cursor-pointer hover:bg-gray-100 border-b border-gray-50 last:border-0"
+                           >
+                              <div class="font-medium text-gray-800" x-text="cust.name"></div>
+                              <div class="text-xs text-gray-500" x-text="cust.office_name"></div>
+                           </div>
+                        </template>
+                        <div x-show="filteredCustomerList.length === 0"
+                             class="px-4 py-3 text-sm text-gray-500 text-center">
+                           No customer found.
+                        </div>
+                     </div>
+
+                     <input type="hidden" x-model="customer_id">
                   </div>
                   <!-- TRANSACTION DATE -->
                   <div>
@@ -346,6 +383,13 @@
                isSubmitting: false,
                notes: `{!! addslashes($transaction->notes ?? '') !!}`,
 
+               // ======================
+               // CUSTOMER SEARCH STATE (BARU)
+               // ======================
+               customerList: @json($customers),
+               filteredCustomerList: [],
+               customerSearch: '',
+               showCustomerDropdown: false,
 
                // ======================
                // UI STATE
@@ -354,32 +398,18 @@
                selectedPackageIndex: null,
                packageSearchQuery: '',
 
-               // ======================
-               // PRICING
-               // ======================
+               // ... (Variable Pricing & Data Source Package tetap sama) ...
                discountPercent: {{ $transaction->discount_percent ?? 0 }},
                taxPercent: {{ $transaction->tax_percent ?? 0 }},
                additionalFee: {{ $transaction->additional_fee ?? 0 }},
-
-               // ======================
-               // DATA SOURCE
-               // ======================
                packageList: @json($packages),
 
-               // ======================
-               // FLATPICKR INSTANCE
-               // ======================
                transactionPicker: null,
                duePicker: null,
                paymentPicker: null,
 
-               // ======================
-               // COMPUTED
-               // ======================
                get filteredPackages() {
-                   if (!this.packageSearchQuery) {
-                       return this.packageList.slice(0, 5);
-                   }
+                   if (!this.packageSearchQuery) return this.packageList.slice(0, 5);
                    return this.packageList.filter(pkg =>
                        pkg.name.toLowerCase().includes(this.packageSearchQuery.toLowerCase()) ||
                        pkg.type.toLowerCase().includes(this.packageSearchQuery.toLowerCase())
@@ -387,9 +417,82 @@
                },
 
                // ======================
-               // INIT
+               // INIT FUNCTION
                // ======================
+               initEditForm() {
+                   // 1. Load Basic Data
+                   this.customer_id = {{ $transaction->customer_id }};
+                   this.transaction_date = '{{ \Carbon\Carbon::parse($transaction->date)->format("Y-m-d H:i") }}';
+                   this.due_date = '{{ \Carbon\Carbon::parse($transaction->deadline)->format("Y-m-d H:i") }}';
+                   this.payment_status = '{{ $transaction->payment_status }}';
+                   this.payment_date = '{{ $transaction->payment_date ? \Carbon\Carbon::parse($transaction->payment_date)->format("Y-m-d H:i") : "" }}';
+                   this.status = '{{ $transaction->status }}';
+
+                   // 2. Load Customer Search Text (PENTING UNTUK EDIT)
+                   // Kita cari data customer yang ID-nya sama dengan transaksi ini
+                   this.filteredCustomerList = this.customerList;
+                   const currentCustomer = this.customerList.find(c => c.id == this.customer_id);
+                   if (currentCustomer) {
+                       this.customerSearch = `${currentCustomer.name} (${currentCustomer.office_name})`;
+                   }
+
+                   // 3. Load Packages
+                   this.packages = JSON.parse('{!! json_encode(
+                    $transaction->transaction_details->map(function($detail) {
+                        return [
+                            "id"    => $detail->package->id,
+                            "name"  => $detail->package->name,
+                            "type"  => $detail->package->category_package->name ?? "-",
+                            "qty"   => $detail->quantity,
+                            "unit"  => $detail->unit,
+                            "price" => $detail->total / max($detail->quantity, 1),
+                        ];
+                    })
+                ) !!}');
+
+                   this.initFlatpickr();
+                   this.initQuill();
+
+                   this.$watch('payment_status', value => {
+                       if (value !== 'PAID') {
+                           this.payment_date = '';
+                           if (this.paymentPicker) this.paymentPicker.clear();
+                       }
+                   });
+               },
+
+               // ======================
+               // CUSTOMER METHODS (BARU)
+               // ======================
+               filterCustomers() {
+                   this.showCustomerDropdown = true;
+                   if (this.customerSearch === '') {
+                       this.filteredCustomerList = this.customerList;
+                   } else {
+                       const search = this.customerSearch.toLowerCase();
+                       this.filteredCustomerList = this.customerList.filter(c =>
+                           c.name.toLowerCase().includes(search) ||
+                           (c.office_name && c.office_name.toLowerCase().includes(search))
+                       );
+                   }
+               },
+
+               selectCustomer(cust) {
+                   this.customer_id = cust.id;
+                   this.customerSearch = `${cust.name} (${cust.office_name})`;
+                   this.showCustomerDropdown = false;
+               },
+
+               clearCustomer() {
+                   this.customer_id = null;
+                   this.customerSearch = '';
+                   this.filteredCustomerList = this.customerList;
+                   this.showCustomerDropdown = false;
+               },
+
+               // ... (Sisanya method Quill, Flatpickr, Validation, Submit tetap sama persis) ...
                initQuill() {
+                   // ... code quill Anda ...
                    const quill = new Quill(this.$refs.quillEditor, {
                        theme: 'snow',
                        placeholder: 'Write notes here...',
@@ -413,43 +516,6 @@
                        this.notes = quill.root.innerHTML;
                    });
                },
-
-               initEditForm() {
-                   this.customer_id = {{ $transaction->customer_id }};
-                   this.transaction_date = '{{ \Carbon\Carbon::parse($transaction->date)->format("Y-m-d H:i") }}';
-                   this.due_date = '{{ \Carbon\Carbon::parse($transaction->deadline)->format("Y-m-d H:i") }}';
-                   this.payment_status = '{{ $transaction->payment_status }}';
-                   this.payment_date = '{{ $transaction->payment_date ? \Carbon\Carbon::parse($transaction->payment_date)->format("Y-m-d H:i") : "" }}';
-                   this.status = '{{ $transaction->status }}';
-
-                   // LOAD PACKAGES
-                   this.packages = JSON.parse('{!! json_encode(
-                $transaction->transaction_details->map(function($detail) {
-                    return [
-                        "id"    => $detail->package->id,
-                        "name"  => $detail->package->name,
-                        "type"  => $detail->package->category_package->name ?? "-",
-                        "qty"   => $detail->quantity,
-                        "unit"  => $detail->unit,
-                        "price" => $detail->total / max($detail->quantity, 1),
-                    ];
-                })
-            ) !!}');
-
-                   this.initFlatpickr();
-                   this.initQuill();
-
-                   this.$watch('payment_status', value => {
-                       if (value !== 'PAID') {
-                           this.payment_date = '';
-                           if (this.paymentPicker) this.paymentPicker.clear();
-                       }
-                   });
-               },
-
-               // ======================
-               // FLATPICKR
-               // ======================
                initFlatpickr() {
                    const self = this;
 
@@ -520,41 +586,21 @@
                        }
                    });
                },
-
-               // ======================
-               // PACKAGE ACTIONS
-               // ======================
                addEmptyPackage() {
-                   this.packages.push({
-                       id: '',
-                       name: '',
-                       type: '',
-                       qty: 1,
-                       unit: '',
-                       price: 0
-                   });
+                   this.packages.push({id:'', name:'', type:'', qty:1, unit:'', price:0});
                },
-
                removePackage(index) {
-                   if (this.packages.length > 1) {
-                       this.packages.splice(index, 1);
-                   } else {
-                       this.toast('You must have at least one package');
-                   }
+                   if(this.packages.length > 1) this.packages.splice(index, 1);
+                   else this.toast('Must have at least one package');
                },
-
                updatePackageTotal(index) {
-                   if (this.packages[index].qty < 1) {
-                       this.packages[index].qty = 1;
-                   }
+                   if(this.packages[index].qty < 1) this.packages[index].qty = 1;
                },
-
                openPackageSearch(index) {
                    this.selectedPackageIndex = index;
                    this.packageSearchQuery = '';
                    this.showPackageModal = true;
                },
-
                selectPackage(pkg) {
                    if (this.selectedPackageIndex === null) return;
 
@@ -570,10 +616,6 @@
                    this.showPackageModal = false;
                    this.selectedPackageIndex = null;
                },
-
-               // ======================
-               // SUMMARY
-               // ======================
                calculateSummary() {
                    const grandTotal = this.packages.reduce(
                        (sum, p) => sum + (p.qty * p.price), 0
@@ -590,14 +632,9 @@
                        totalPayment: afterDiscount + taxAmount + this.additionalFee
                    };
                },
-
                formatCurrency(value) {
                    return 'Rp ' + Number(value || 0).toLocaleString('id-ID');
                },
-
-               // ======================
-               // VALIDATION
-               // ======================
                validateForm() {
                    if (!this.customer_id) return this.toast('Please select a customer');
                    if (!this.transaction_date) return this.toast('Please enter transaction date');
@@ -619,21 +656,10 @@
 
                    return true;
                },
-
-               toast(message) {
-                   Swal.fire({
-                       icon: 'warning',
-                       title: 'Opps!',
-                       text: message,
-                       showConfirmButton: false,
-                       timer: 1500
-                   });
+               toast(msg) {
+                   Swal.fire({icon: 'warning', title: 'Opps!', text: msg, showConfirmButton: false, timer: 1500});
                    return false;
                },
-
-               // ======================
-               // SUBMIT
-               // ======================
                validateAndUpdate() {
                    if (!this.validateForm()) return;
 
@@ -650,7 +676,6 @@
                        }
                    });
                },
-
                getTransactionPayload() {
                    const summary = this.calculateSummary();
 
@@ -676,7 +701,6 @@
                        }))
                    };
                },
-
                updateTransaction() {
                    fetch(`/account/transactions/${this.transaction_id}`, {
                        method: 'PUT',

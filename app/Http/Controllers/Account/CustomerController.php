@@ -45,36 +45,48 @@
       public function previewImport(Request $request)
       {
          $request->validate([
-            'file' => 'required|mimes:xlsx,xls',
+            'file'      => 'required|mimes:xlsx,xls',
             'outlet_id' => 'nullable|integer',
          ]);
 
-         try {
-            // 1. Baca Excel Langsung ke Array (Tanpa simpan file Excel fisik)
-            // Kita gunakan Import Class hanya untuk struktur, tapi datanya kita ambil langsung
-            $rawArray = Excel::toArray(new CustomersImport(
-               auth()->user()->outlet_id,
-               false // parameter dummy
-            ), $request->file('file'));
+         $user = auth()->user();
+         $isAdmin = $user->can('admin');
 
-         } catch (\Exception $e) {
-            return back()->with('error', 'Gagal membaca file Excel. Pastikan format sesuai.');
+         // Tentukan outlet target secara aman
+         $targetOutletId = $isAdmin
+            ? (int) $request->outlet_id
+            : (int) $user->outlet_id;
+
+         if (!$targetOutletId) {
+            return back()->with('error', 'Outlet tidak valid.');
          }
 
-         // 2. Bersihkan & Format Data
-         // Asumsi data ada di sheet 1 (index 0)
-         $rows = collect($rawArray[0] ?? [])->filter(function ($row) {
-            return !empty($row['email']) && !empty($row['name']); // Validasi dasar baris kosong
-         });
+         try {
+            $rawArray = Excel::toArray(
+               new CustomersImport(
+                  $targetOutletId, // PASTI INT
+                  $isAdmin,
+                  $isAdmin ? $targetOutletId : null
+               ),
+               $request->file('file')
+            );
+         } catch (\Throwable $e) {
+            return back()->with('error', 'Gagal membaca file Excel. Format tidak valid.');
+         }
+
+         // ===============================
+         // Sheet 1
+         // ===============================
+         $rows = collect($rawArray[0] ?? [])
+            ->filter(fn ($row) =>
+               !empty($row['email']) && !empty($row['name'])
+            );
 
          if ($rows->isEmpty()) {
-            return back()->with('error', 'File Excel kosong atau tidak ada kolom email/name yang valid.');
+            return back()->with('error', 'File Excel kosong atau tidak valid.');
          }
 
-         // 3. Siapkan Data Matang untuk Preview & Staging
-         $targetOutletId = $request->filled('outlet_id') ? (int) $request->outlet_id : auth()->user()->outlet_id;
-
-         // Ambil email existing untuk cek UPDATE/INSERT
+         // Ambil email existing
          $existingEmails = Customer::where('outlet_id', $targetOutletId)
                                    ->pluck('email')
                                    ->toArray();
@@ -90,24 +102,22 @@
                'office_name' => $row['office_name'] ?? null,
                'phone'       => $row['phone'] ?? null,
                'address'     => $row['address'] ?? null,
-               'status'      => $exists ? 'UPDATE' : 'INSERT', // Flag untuk UI
-               'row_class'   => $exists ? 'bg-blue-50 text-blue-700' : 'bg-green-50 text-green-700'
+               'status'      => $exists ? 'UPDATE' : 'INSERT',
+               'row_class'   => $exists
+                  ? 'bg-blue-50 text-blue-700'
+                  : 'bg-green-50 text-green-700',
             ];
-         })->values()->toArray(); // Reset keys agar jadi clean array
+         })->values()->toArray();
 
-         // 4. SIMPAN DATA KE FILE JSON (STAGING)
-         // Kita simpan file berdasarkan User ID agar tidak tertukar antar user
-         $stagingFilename = 'import_staging/user_' . auth()->id() . '.json';
-         Storage::put($stagingFilename, json_encode($processedData));
-
-         // 5. Tampilkan View
-         $outlets = auth()->user()->can('admin') ? Outlet::all() : collect();
+         // Simpan staging JSON
+         $stagingFile = 'import_staging/user_' . auth()->id() . '.json';
+         Storage::put($stagingFile, json_encode($processedData));
 
          return view('account.customers.preview-import', [
-            'previewData' => collect($processedData), // Kirim sebagai collection ke View
-            'stagingFile' => $stagingFilename,        // Kirim nama file JSON ke View
-            'targetOutletId' => $targetOutletId,
-            'outlets' => $outlets
+            'previewData'   => collect($processedData),
+            'stagingFile'   => $stagingFile,
+            'targetOutletId'=> $targetOutletId,
+            'outlets'       => $isAdmin ? Outlet::all() : collect(),
          ]);
       }
 

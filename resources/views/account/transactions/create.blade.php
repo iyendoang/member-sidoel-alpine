@@ -30,16 +30,55 @@
 
                   <!-- Customer and Date Information -->
                   <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                     <div>
+                     <div class="relative" @click.outside="showCustomerDropdown = false">
                         <label class="block font-medium mb-1">Customer</label>
-                        <select class="w-full border border-gray-200 rounded-xl px-3 py-2" x-model="customer_id"
-                                required>
-                           <option value="">~ Select Customer ~</option>
-                           @foreach ($customers as $customer)
-                              <option value="{{ $customer->id }}">{{ $customer->name  . ' (' . $customer->office_name.')'}}</option>
-                           @endforeach
-                        </select>
+
+                        <div class="relative">
+                           <input
+                                   type="text"
+                                   class="w-full border border-gray-200 rounded-xl px-3 py-2 pr-10 focus:outline-none focus:ring-1 focus:ring-primary"
+                                   placeholder="Search or select customer..."
+                                   x-model="customerSearch"
+                                   @focus="showCustomerDropdown = true"
+                                   @input="filterCustomers()"
+                           />
+
+                           <div class="absolute inset-y-0 right-0 flex items-center pr-3 cursor-pointer">
+                              <template x-if="customer_id">
+                                 <button type="button" @click="clearCustomer()" class="text-gray-400 hover:text-red-500">
+                                    ✕
+                                 </button>
+                              </template>
+                              <template x-if="!customer_id">
+                                 <span class="text-gray-400" @click="showCustomerDropdown = !showCustomerDropdown">▼</span>
+                              </template>
+                           </div>
+                        </div>
+
+                        <div
+                                x-show="showCustomerDropdown"
+                                x-transition.opacity
+                                class="absolute z-10 w-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg max-h-60 overflow-y-auto"
+                                style="display: none;"
+                        >
+                           <template x-for="cust in filteredCustomerList" :key="cust.id">
+                              <div
+                                      @click="selectCustomer(cust)"
+                                      class="px-4 py-2 cursor-pointer hover:bg-gray-100 border-b border-gray-50 last:border-0"
+                              >
+                                 <div class="font-medium text-gray-800" x-text="cust.name"></div>
+                                 <div class="text-xs text-gray-500" x-text="cust.office_name"></div>
+                              </div>
+                           </template>
+
+                           <div x-show="filteredCustomerList.length === 0" class="px-4 py-3 text-sm text-gray-500 text-center">
+                              No customer found.
+                           </div>
+                        </div>
+
+                        <input type="hidden" x-model="customer_id" required>
                      </div>
+
                      <div>
                         <label class="block font-medium mb-1">Date</label>
                         <input
@@ -369,6 +408,11 @@
                duePicker: null,
                paymentPicker: null,
 
+               customerList: @json($customers), // Ambil data dari controller
+               filteredCustomerList: [],        // Data yang ditampilkan di dropdown
+               customerSearch: '',              // Teks yang diketik user
+               showCustomerDropdown: false,
+
                // =====================
                // COMPUTED
                // =====================
@@ -406,16 +450,53 @@
 
                init() {
                    this.initFlatpickr();
-                   this.initQuill(); // ✅ TAMBAHKAN INI
+                   this.initQuill();
+
+                   // Init Customer List
+                   this.filteredCustomerList = this.customerList;
 
                    this.$watch('payment_status', (value) => {
                        if (value !== 'PAID') {
                            this.payment_date = null;
-                           if (this.paymentPicker) {
-                               this.paymentPicker.clear();
-                           }
+                           if (this.paymentPicker) this.paymentPicker.clear();
                        }
                    });
+               },
+               // =====================
+               // TAMBAHAN: CUSTOMER METHODS
+               // =====================
+               filterCustomers() {
+                   // Jika user mengetik, reset customer_id agar validasi jalan
+                   if (this.customer_id) {
+                       // Opsional: Jika Anda ingin user harus klik ulang, biarkan null
+                       // Tapi biasanya user ingin edit search
+                   }
+
+                   this.showCustomerDropdown = true;
+
+                   if (this.customerSearch === '') {
+                       this.filteredCustomerList = this.customerList;
+                   } else {
+                       this.filteredCustomerList = this.customerList.filter(c => {
+                           const search = this.customerSearch.toLowerCase();
+                           return c.name.toLowerCase().includes(search) ||
+                               (c.office_name && c.office_name.toLowerCase().includes(search));
+                       });
+                   }
+               },
+
+               selectCustomer(cust) {
+                   this.customer_id = cust.id;
+                   // Tampilkan format: Nama (Kantor)
+                   this.customerSearch = `${cust.name} (${cust.office_name})`;
+                   this.showCustomerDropdown = false;
+               },
+
+               clearCustomer() {
+                   this.customer_id = null;
+                   this.customerSearch = '';
+                   this.filteredCustomerList = this.customerList;
+                   this.showCustomerDropdown = false;
                },
 
                // =====================

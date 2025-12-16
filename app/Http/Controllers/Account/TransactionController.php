@@ -84,21 +84,21 @@
        *
        * @return \Illuminate\Http\JsonResponse
        */
-      public function store(Request $request) {
+      public function store(Request $request)
+      {
          try {
-            DB::transaction(function() use ($request) {
-               $invoice     = 'INV-' . mt_rand(1000, 9999);
-               $config      = HTMLPurifier_Config::createDefault();
-               $purifier    = new HTMLPurifier($config);
-               $notes       = $purifier->purify($request->notes);
+            DB::transaction(function () use ($request) {
+
+               $invoice = 'INV-' . mt_rand(1000, 9999);
+
                $transaction = Transaction::create([
                   'invoice'          => $invoice,
-                  'user_id'          => auth()->user()->id,
+                  'user_id'          => auth()->id(),
                   'outlet_id'        => auth()->user()->outlet_id,
                   'customer_id'      => $request->customer_id,
                   'date'             => $request->transaction_date,
                   'deadline'         => $request->due_date,
-                  'status'           => $request->status ?? 'NEW', // default NEW jika kosong
+                  'status'           => $request->status ?? 'NEW',
                   'payment_status'   => $request->payment_status,
                   'payment_date'     => $request->payment_date,
                   'tax_percent'      => $request->tax_percent ?? 0,
@@ -107,15 +107,17 @@
                   'discount_amount'  => $request->discount_amount ?? 0,
                   'additional_fee'   => $request->additional_fee ?? 0,
                   'total_price'      => $request->total_price,
-                  'notes'            => $notes ?? NULL,
+                  'notes'            => $this->purifyNotes($request->notes),
                ]);
-               foreach($request->packages as $packageData) {
+
+               foreach ($request->packages as $packageData) {
                   $package = Package::findOrFail($packageData['id']);
+
                   $transaction->transaction_details()->create([
                      'package_id' => $package->id,
                      'quantity'   => $packageData['qty'],
                      'unit'       => $packageData['unit'],
-                     'total'      => $package->price*$packageData['qty'],
+                     'total'      => $package->price * $packageData['qty'],
                   ]);
                }
             });
@@ -123,7 +125,8 @@
             return response()->json([
                'message' => 'Transaksi berhasil disimpan.',
             ], 201);
-         } catch(\Throwable $e) {
+
+         } catch (\Throwable $e) {
             return response()->json([
                'message' => 'Gagal menyimpan transaksi.',
                'error'   => $e->getMessage(),
@@ -226,22 +229,22 @@
        *
        * @return \Illuminate\Contracts\View\Factory|\Illuminate\Contracts\View\View
        */
-      //      public function print($id) {
-      //         //get transaction
-      //         $transaction = Transaction::with('outlet', 'customer', 'transaction_details.package')->findOrFail($id);
-      //         //check if request type is regular or thermal
-      //         if(request('type') == 'regular'){
-      //            //generate pdf
-      //            $pdf = Pdf::loadView('account.transactions.print.reguler', compact('transaction'));
-      //         }
-      //         else {
-      //            //generate thermal
-      //            return view('account.transactions.print.thermal', compact('transaction'));
-      //         }
-      //
-      //         //return
-      //         return $pdf->download('receipt.pdf');
-      //      }
+//            public function print($id) {
+//               //get transaction
+//               $transaction = Transaction::with('outlet', 'customer', 'transaction_details.package')->findOrFail($id);
+//               //check if request type is regular or thermal
+//               if(request('type') == 'regular'){
+//                  //generate pdf
+//                  $pdf = Pdf::loadView('account.transactions.print.reguler', compact('transaction'));
+//               }
+//               else {
+//                  //generate thermal
+//                  return view('account.transactions.print.thermal', compact('transaction'));
+//               }
+//
+//               //return
+//               return $pdf->download('receipt.pdf');
+//            }
       public function print($id) {
          // Get transaction
          $transaction = Transaction::with('outlet', 'customer', 'transaction_details.package')->findOrFail($id);
@@ -275,4 +278,21 @@
          //redirect
          return redirect()->route('account.transactions.index')->with('success', 'Transaction deleted successfully');
       }
+      protected function purifyNotes(?string $notes): ?string
+      {
+         if (!$notes) {
+            return null;
+         }
+
+         $config = HTMLPurifier_Config::createDefault();
+
+         // ⬅️ PENTING: arahkan cache ke storage
+         $config->set('Cache.SerializerPath', storage_path('app/htmlpurifier'));
+
+         // (opsional) batasi HTML yang boleh
+         // $config->set('HTML.Allowed', 'p,br,strong,em,ul,ol,li');
+
+         return (new HTMLPurifier($config))->purify($notes);
+      }
+
    }
